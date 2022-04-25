@@ -70,8 +70,13 @@ module K005295
     output  wire            o_CAS,
 
     //framebuffer
+`ifdef GX400_UNFOLD_DRAM_ADDR
+    output  wire   [15:0]   o_FA, //ODD BUFFER
+    output  wire   [15:0]   o_FB, //EVEN BUFFER
+`else
     output  wire    [7:0]   o_FA, //ODD BUFFER
     output  wire    [7:0]   o_FB, //EVEN BUFFER
+`endif
 
     output  reg             o_XA7,
     output  reg             o_XB7,
@@ -90,7 +95,18 @@ module K005295
     output  wire    [2:0]   o_PIXELSEL,
 
     //CHARRAM address
+`ifdef GX400_UNFOLD_DRAM_ADDR
+    output  wire   [13:0]   o_OCA
+`else
     output  wire    [7:0]   o_OCA
+`endif
+    
+    //debugging
+`ifdef GX400_DEBUG
+    ,
+    output  wire            o_SPRITE_LATE,
+    output  wire   [ 2:0]   o_FSM_STATE
+`endif
 );
 
 
@@ -205,6 +221,9 @@ reg     [7:0]   LATCH_B; //OBJRAM BYTE 4: zoom LSBs[7:0]
 reg     [7:0]   LATCH_C; //OBJRAM BYTE 6: sprite code LSBs[7:0]
 reg     [7:0]   LATCH_D; //OBJRAM BYTE 8: sprite code MSBs[7:6], vflip[5], obj palette[4:1], xpos MSB[0]
 reg     [7:0]   LATCH_E; //OBJRAM BYTE A: xpos LSBs[7:0]
+`ifdef GX400_DEBUG
+reg     [7:0]   LATCH_F; //OBJRAM BYTE C: ypos[7:0]
+`endif
 
 assign  o_XPOS_D0 = LATCH_E[0];
 assign  o_LATCH_A_D2 = LATCH_A[2];
@@ -238,13 +257,26 @@ begin
         begin
             LATCH_E <= i_OBJDATA;
         end
+
+    `ifdef GX400_DEBUG
+        if(!LATCH_F_en_n)
+        begin
+            LATCH_F <= i_OBJDATA;
+        end
+    `endif
     end
 end
 
-
-
-
-
+`ifdef GX400_DEBUG
+    wire [9:0] dbg_sprite_zoom    = { LATCH_A[7:6], LATCH_B };
+    wire [2:0] dbg_sprite_size    = LATCH_A[5:3];
+    wire       dbg_sprite_hflip   = LATCH_A[0];
+    wire [9:0] dbg_sprite_code    = { LATCH_D[7:6], LATCH_C };
+    wire       dbg_sprite_vflip   = LATCH_D[5];
+    wire [3:0] dbg_sprite_palette = LATCH_D[4:1];
+    wire [8:0] dbg_sprite_xpos    = { LATCH_D[0], LATCH_E };
+    wire [7:0] dbg_sprite_ypos    = LATCH_F;
+`endif
 
 ///////////////////////////////////////////////////////////
 //////  HZOOM FEEDBACK ACCUMULATOR
@@ -728,6 +760,10 @@ localparam SUSPEND_S0 = 3'd0;
 
 //Declare state register
 reg     [2:0]   sprite_engine_state = SUSPEND_S0; //3'd0 = reset state, Quartus always reset FSM as 0
+
+`ifdef GX400_DEBUG
+    assign o_FSM_STATE = sprite_engine_state;
+`endif
 
 //Determine the next state synchronously, based on the current state and the input
 always @ (posedge i_EMU_MCLK) 
@@ -1725,7 +1761,12 @@ wire    [2:0]   TILELINE_ADDR = hzoom_tileline_cntr ^ {3{LATCH_A[0]}};
 wire    [2:0]   HLINE_ADDR = vzoom_acc[9:7] ^ {3{LATCH_D[5]}};
 wire    [3:0]   VTILE_ADDR = vzoom_vtile_cntr ^ {4{LATCH_D[5]}};
 reg     [13:0]  CHARRAM_ADDR; //unmultiplexed
-assign  o_OCA = (i_CHAMPX == 1'b0) ? CHARRAM_ADDR[7:0] : {1'b1, CHARRAM_ADDR[13:8], 1'b1}; //RAS : CAS
+
+`ifdef GX400_UNFOLD_DRAM_ADDR
+    assign  o_OCA = CHARRAM_ADDR;
+`else
+    assign  o_OCA = (i_CHAMPX == 1'b0) ? CHARRAM_ADDR[7:0] : {1'b1, CHARRAM_ADDR[13:8], 1'b1}; //RAS : CAS
+`endif
 
 always @(*)
 begin
@@ -1867,8 +1908,14 @@ end
 
 reg     [15:0]  EVENBUFFER_ADDR; //unmultiplexed, buffer A on the Nemesis schematics
 reg     [15:0]  ODDBUFFER_ADDR; //unmultiplexed, buffer B on the Nemesis schematics
-assign  o_FA = (o_CAS == 1'b0) ? EVENBUFFER_ADDR[7:0] : EVENBUFFER_ADDR[15:8]; //RAS : CAS
-assign  o_FB = (o_CAS == 1'b0) ?  ODDBUFFER_ADDR[7:0] :  ODDBUFFER_ADDR[15:8]; //RAS : CAS
+
+`ifdef GX400_UNFOLD_DRAM_ADDR
+    assign  o_FA = EVENBUFFER_ADDR;
+    assign  o_FB = ODDBUFFER_ADDR;
+`else
+    assign  o_FA = (o_CAS == 1'b0) ? EVENBUFFER_ADDR[7:0] : EVENBUFFER_ADDR[15:8]; //RAS : CAS
+    assign  o_FB = (o_CAS == 1'b0) ?  ODDBUFFER_ADDR[7:0] :  ODDBUFFER_ADDR[15:8]; //RAS : CAS
+`endif
 
 /*
     SPRITE DOUBLE BUFFERING(VERIFIED)
@@ -1892,6 +1939,17 @@ begin
     endcase
 end
 
+`ifdef GX400_DEBUG
+
+wire [14:0] draw_addr   = { buffer_ypos_counter, evenbuffer_xpos_counter[6:0] };
+wire [14:0] disp_addr   = { ( buffer_y_screencounter ) ^ {8{i_FLIP}}, 7'h7F ^ {7{i_FLIP}} };
+
+// sprite is late when it’s being drawn at an address that has already been displayed
+wire        sprite_late = i_VBLANK_n & ( disp_addr > draw_addr );
+
+assign o_SPRITE_LATE = sprite_late;
+
+`endif
 
 
 
