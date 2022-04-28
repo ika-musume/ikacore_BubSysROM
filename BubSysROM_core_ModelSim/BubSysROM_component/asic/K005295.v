@@ -214,6 +214,9 @@ reg     [7:0]   LATCH_B; //OBJRAM BYTE 4: zoom LSBs[7:0]
 reg     [7:0]   LATCH_C; //OBJRAM BYTE 6: sprite code LSBs[7:0]
 reg     [7:0]   LATCH_D; //OBJRAM BYTE 8: sprite code MSBs[7:6], vflip[5], obj palette[4:1], xpos MSB[0]
 reg     [7:0]   LATCH_E; //OBJRAM BYTE A: xpos LSBs[7:0]
+`ifdef SIMULATION
+reg     [7:0]   LATCH_F; //OBJRAM BYTE C: ypos[7:0]
+`endif
 
 assign  o_XPOS_D0 = LATCH_E[0];
 assign  o_LATCH_A_D2 = LATCH_A[2];
@@ -247,9 +250,26 @@ begin
         begin
             LATCH_E <= i_OBJDATA;
         end
+
+    `ifdef SIMULATION
+        if(!LATCH_F_en_n)
+        begin
+            LATCH_F <= i_OBJDATA;
+        end
+    `endif
     end
 end
 
+`ifdef SIMULATION
+    wire [9:0] dbg_sprite_zoom    = { LATCH_A[7:6], LATCH_B };
+    wire [2:0] dbg_sprite_size    = LATCH_A[5:3];
+    wire       dbg_sprite_hflip   = LATCH_A[0];
+    wire [9:0] dbg_sprite_code    = { LATCH_D[7:6], LATCH_C };
+    wire       dbg_sprite_vflip   = LATCH_D[5];
+    wire [3:0] dbg_sprite_palette = LATCH_D[4:1];
+    wire [8:0] dbg_sprite_xpos    = { LATCH_D[0], LATCH_E };
+    wire [7:0] dbg_sprite_ypos    = LATCH_F;
+`endif
 
 
 
